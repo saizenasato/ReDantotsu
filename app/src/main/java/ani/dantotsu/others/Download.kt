@@ -154,55 +154,22 @@ object Download {
 
     fun batchDownload(context: Context, items: List<Triple<FileUrl, String, String>>) {
         if (items.isEmpty()) return
-        // For batch of 2+, 1DM's Downloader activity is singleTask/singleTop.
-        // Use ACTION_SEND_MULTIPLE with all URLs in ONE intent so 1DM queues them atomically.
-        // Fallback: multiple intents each in its own task (NEW_DOCUMENT|MULTIPLE_TASK) with delay.
         val dm = PrefManager.getVal(PrefName.DownloadManager) as Int
         if (items.size == 1 || dm == 0) {
             for ((file, fileName, notif) in items) download(context, file, fileName, "", notif)
             return
         }
         toast("Batch: ${items.size} episodes queued")
+        // Sequential intents, each in its own task so 1DM's singleTask Downloader doesn't replace the first
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            // Try the multi-URL path first (1DM supports ACTION_SEND_MULTIPLE with EXTRA_STREAM)
-            val sent = withContext(kotlinx.coroutines.Dispatchers.Main) {
-                tryBatchOneDMMulti(context, items)
-            }
-            if (!sent) {
-                // Fallback: sequential intents, each in its own task so they don't replace each other
-                for ((file, fileName, notif) in items) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        val ok = tryOneDMNewTask(context, file, notif)
-                        if (!ok) download(context, file, fileName, "", notif)
-                    }
-                    kotlinx.coroutines.delay(2500)
+            for ((file, fileName, notif) in items) {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    val ok = tryOneDMNewTask(context, file, notif)
+                    if (!ok) download(context, file, fileName, "", notif)
                 }
+                kotlinx.coroutines.delay(2500)
             }
         }
-    }
-
-    private fun tryBatchOneDMMulti(
-        context: Context,
-        items: List<Triple<FileUrl, String, String>>
-    ): Boolean {
-        val appName = when {
-            isPackageInstalled("idm.internet.download.manager.plus", context.packageManager) -> "idm.internet.download.manager.plus"
-            isPackageInstalled("idm.internet.download.manager", context.packageManager) -> "idm.internet.download.manager"
-            isPackageInstalled("idm.internet.download.manager.adm.lite", context.packageManager) -> "idm.internet.download.manager.adm.lite"
-            else -> return false
-        }
-        return try {
-            val uris = ArrayList<Uri>(items.size)
-            items.forEach { uris.add(Uri.parse(it.first.url)) }
-            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "*/*"
-                component = ComponentName(appName, "idm.internet.download.manager.Downloader")
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            ContextCompat.startActivity(context, intent, null)
-            true
-        } catch (_: Exception) { false }
     }
 
     private fun tryOneDMNewTask(context: Context, file: FileUrl, notif: String): Boolean {

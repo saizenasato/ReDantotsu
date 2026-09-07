@@ -467,23 +467,29 @@ class AnimeWatchFragment : Fragment() {
             lifecycleScope.launch(Dispatchers.IO) {
                 val items = mutableListOf<Triple<ani.dantotsu.FileUrl, String, String>>()
                 val sourceIndex = media.selected?.sourceIndex ?: 0
-                // Ensure episode list is loaded for the selected source (no need to play first)
-                try {
-                    model.loadEpisodes(media, sourceIndex, true)
-                } catch (_: Exception) {}
                 val regex = "[\\\\/:*?\"<>|]".toRegex()
                 val aTitle = media.mainName().replace(regex, "")
+                // Only reload episode list if a selected key is missing (avoid race that skips first episode)
+                val needsReload = selected.any { media.anime?.episodes?.get(it) == null }
+                if (needsReload) {
+                    try {
+                        model.loadEpisodes(media, sourceIndex, true)
+                        kotlinx.coroutines.delay(800)
+                    } catch (_: Exception) {}
+                }
                 for (epNum in selected) {
                     try {
                         var ep = media.anime?.episodes?.get(epNum) ?: continue
                         // If videos not loaded, load all servers and pick the first with video (no need to play first)
                         if (ep.extractors.isNullOrEmpty()) {
                             try {
-                                // loadEpisodeVideos loads ALL video servers for the episode and picks the first one with videos
                                 model.loadEpisodeVideos(ep, sourceIndex, false)
-                                // Refresh reference after fetch (extractorCallback populates list)
-                                ep = media.anime?.episodes?.get(epNum) ?: ep
-                                kotlinx.coroutines.delay(1200)
+                                var waited = 0
+                                while (ep.extractors.isNullOrEmpty() && waited < 5000) {
+                                    kotlinx.coroutines.delay(200)
+                                    waited += 200
+                                    ep = media.anime?.episodes?.get(epNum) ?: ep
+                                }
                             } catch (_: Exception) {}
                         }
                         val extractor = ep.extractors?.find { it.server.name == ep.selectedExtractor }
